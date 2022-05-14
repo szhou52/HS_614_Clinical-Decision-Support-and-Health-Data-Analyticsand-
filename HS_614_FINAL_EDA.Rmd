@@ -1,0 +1,310 @@
+---
+title: "HS_614_FINAL_EDA"
+author: "Shuhao Zhou"
+date: "5/12/2022"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(corrplot)
+library(ggplot2)
+```
+
+
+Create a dataframe for EDA (pretty much the same process with the data processing part but not converting the categorical variables to dummy variables)
+```{r}
+df_diabetes<-read.csv('C:/USFCA/HS 614/Final Project/diabetic_data.csv')
+
+#Drop the following variables:
+#encounter_id (irrelevant)
+#patient_nbr (irrelevant)
+#weight(too many missing)
+#payer_code (too many missing)
+df_diabetes <- subset(df_diabetes,select=-c(encounter_id,patient_nbr,weight,payer_code))
+
+#Convert all the characters (other than diag_1, diag_2 and diag_3, which will be processed later) into factors
+for (i in 1:ncol(df_diabetes)){
+  if(is.character(df_diabetes[,i])&colnames(df_diabetes)[i]!='diag_1'&colnames(df_diabetes)[i]!='diag_2'&colnames(df_diabetes)[i]!='diag_3'){
+    df_diabetes[,i]=factor(df_diabetes[,i])}
+}
+
+#Convert admission_type_id,discharge_disposition_id,admission_source_id into factors
+df_diabetes$admission_type_id<-factor(df_diabetes$admission_type_id)
+df_diabetes$admission_source_id<-factor(df_diabetes$admission_source_id)
+df_diabetes$discharge_disposition_id<-factor(df_diabetes$discharge_disposition_id)
+
+#Remove rows without information for the key variables
+df_diabetes<-df_diabetes[df_diabetes$race!='?'&df_diabetes$gender!='Unknown/Invalid'&df_diabetes$medical_specialty!='?',]
+
+df_diabetes$race <- factor(as.character(df_diabetes$race))
+df_diabetes$gender <- factor(as.character(df_diabetes$gender))
+df_diabetes$medical_specialty <- factor(as.character(df_diabetes$medical_specialty))
+
+#Remove variables where almost all the cases assigned with the same label
+df_diabetes<-subset(df_diabetes,select=-c(chlorpropamide,acetohexamide,tolbutamide,acarbose,miglitol,troglitazone,tolazamide,examide,citoglipton,glipizide.metformin,glimepiride.pioglitazone,metformin.rosiglitazone,metformin.pioglitazone))
+
+#Re-categorize some variables to make sure there’re decent number of observations under each label
+
+df_diabetes$admission_type<-case_when(df_diabetes$admission_type_id==1~'emergency',
+                                     df_diabetes$admission_type_id==2~'urgent',
+                                     df_diabetes$admission_type_id==3~'elective')
+df_diabetes$discharge_disposition<-case_when(df_diabetes$discharge_disposition_id==1~'Home',
+!(df_diabetes$discharge_disposition_id %in% c(1,18,25,2))~'Others')
+
+df_diabetes$admission_source<-case_when(df_diabetes$admission_source_id==7~'emergency_room',
+                                       df_diabetes$admission_source_id %in% c(1,2)~'referral_from_physician_or_clinic',
+                                       !(df_diabetes$admission_source_id %in% c(1,2,7,9,15,16,19,20))~'Others')
+
+df_diabetes$admission_type<-factor(df_diabetes$admission_type)
+df_diabetes$discharge_disposition<-factor(df_diabetes$discharge_disposition)
+df_diabetes$admission_source<-factor(df_diabetes$admission_source)
+
+df_diabetes$specialty_sm <- ifelse(df_diabetes$medical_specialty %in% c('InternalMedicine','Emergency/Trauma','Family/GeneralPractice','Cardiology','Surgery-General'),as.character(df_diabetes$medical_specialty),'Others')
+df_diabetes$specialty_sm <- factor(df_diabetes$specialty_sm)
+
+df_diabetes$repaglinide_status<-ifelse(df_diabetes$repaglinide %in% c('Down','Up'),'Change',as.character(df_diabetes$repaglinide))
+df_diabetes$nateglinide_status<-ifelse(df_diabetes$nateglinide=='No','No','Taken')
+df_diabetes$pioglitazone_status<-ifelse(df_diabetes$pioglitazone %in% c('Down','Up'),'Change',as.character(df_diabetes$pioglitazone))
+df_diabetes$rosiglitazone_status<-ifelse(df_diabetes$rosiglitazone %in% c('Down','Up'),'Change',as.character(df_diabetes$rosiglitazone))
+df_diabetes$glyburide.metformin_status<-ifelse(df_diabetes$glyburide.metformin=='No','No','Taken')
+
+df_diabetes$repaglinide_status<-factor(df_diabetes$repaglinide_status)
+df_diabetes$nateglinide_status<-factor(df_diabetes$nateglinide_status)
+df_diabetes$pioglitazone_status<-factor(df_diabetes$pioglitazone_status)
+df_diabetes$rosiglitazone_status<-factor(df_diabetes$rosiglitazone_status)
+df_diabetes$glyburide.metformin_status<-factor(df_diabetes$glyburide.metformin_status)
+
+df_diabetes$readmitted_binary<-ifelse(df_diabetes$readmitted=='<30','Yes','No')
+df_diabetes$readmitted_binary<-factor(df_diabetes$readmitted_binary)
+
+df_diabetes <- na.omit(df_diabetes)
+
+```
+
+
+Add dummy variables for diagnosis
+```{r}
+df_diabetes_diag=subset(df_diabetes,select=c(diag_1,diag_2,diag_3))
+
+df_diabetes_diag$diag_circ <- 'No'
+df_diabetes_diag$diag_resp <- 'No'
+df_diabetes_diag$diag_dig <- 'No'
+df_diabetes_diag$diag_diab <- 'No'
+df_diabetes_diag$diag_inj <- 'No'
+df_diabetes_diag$diag_musc <-'No'
+df_diabetes_diag$diag_geni <- 'No'
+df_diabetes_diag$diag_neop <-'No'
+df_diabetes_diag$diag_other <- 'No'
+
+df_diabetes_diag$diag_circ[(as.character( df_diabetes_diag$diag_1) >= "390" & as.character( df_diabetes_diag$diag_1) <= "459" |  as.character( df_diabetes_diag$diag_1 ) == "785")
+                   | (as.character( df_diabetes_diag$diag_2) >= "390" & as.character( df_diabetes_diag$diag_2) <= "459" |  as.character( df_diabetes_diag$diag_2 ) == "785")
+                   | (as.character( df_diabetes_diag$diag_3) >= "390" & as.character( df_diabetes_diag$diag_3) <= "459" |  as.character( df_diabetes_diag$diag_3 ) == "785")] <- 'Yes'
+
+#creating diagnosis varible for Diabetes mellitus codes: 250.xx
+
+df_diabetes_diag$diag_diab[(as.character(df_diabetes_diag$diag_1) > "249" & as.character(df_diabetes_diag$diag_1) < "251")
+                   | (as.character(df_diabetes_diag$diag_2) > "249" & as.character(df_diabetes_diag$diag_2) < "251")
+                   | (as.character(df_diabetes_diag$diag_3) > "249" & as.character(df_diabetes_diag$diag_3) < "251")] <- 'Yes'
+
+#creating diagnosis varible for Respiratory codes: 460-519, 786
+
+df_diabetes_diag$diag_resp[(as.character( df_diabetes_diag$diag_1) >= "460" & as.character( df_diabetes_diag$diag_1) <= "519" |  as.character( df_diabetes_diag$diag_1 ) == "786")
+                   | (as.character( df_diabetes_diag$diag_2) >= "460" & as.character( df_diabetes_diag$diag_2) <= "519" |  as.character( df_diabetes_diag$diag_2 ) == "786")
+                   | (as.character( df_diabetes_diag$diag_3) >= "460" & as.character( df_diabetes_diag$diag_3) <= "519" |  as.character( df_diabetes_diag$diag_3 ) == "786")] <- 'Yes'
+
+#creating diagnosis varible for Digestive codes: 520-579, 787
+
+df_diabetes_diag$diag_dig[(as.character( df_diabetes_diag$diag_1) >= "520" & as.character( df_diabetes_diag$diag_1) <= "579" |  as.character( df_diabetes_diag$diag_1 ) == "787")
+                  | (as.character( df_diabetes_diag$diag_2) >= "520" & as.character( df_diabetes_diag$diag_2) <= "579" |  as.character( df_diabetes_diag$diag_2 ) == "787")
+                  | (as.character( df_diabetes_diag$diag_3) >= "520" & as.character( df_diabetes_diag$diag_3) <= "579" |  as.character( df_diabetes_diag$diag_3 ) == "787")] <- 'Yes'
+
+#creating diagnosis varible for Injury codes: 800-999
+
+df_diabetes_diag$diag_inj[(as.character( df_diabetes_diag$diag_1) >= "800" & as.character( df_diabetes_diag$diag_1) <= "999")
+                  | (as.character( df_diabetes_diag$diag_2) >= "800" & as.character( df_diabetes_diag$diag_2) <= "999")
+                  | (as.character( df_diabetes_diag$diag_3) >= "800" & as.character( df_diabetes_diag$diag_3) <= "999")] <- 'Yes'
+
+#creating diagnosis varible for Musculoskeletal codes: 710-739
+
+df_diabetes_diag$diag_musc[(as.character( df_diabetes_diag$diag_1) >= "710" & as.character( df_diabetes_diag$diag_1) <= "739")
+                   | (as.character( df_diabetes_diag$diag_2) >= "710" & as.character( df_diabetes_diag$diag_2) <= "739")
+                   | (as.character( df_diabetes_diag$diag_3) >= "710" & as.character( df_diabetes_diag$diag_3) <= "739")] <- 'Yes'
+
+#creating diagnosis varible for Genitourinary codes: 580-629, 788
+
+df_diabetes_diag$diag_geni[(as.character( df_diabetes_diag$diag_1) >= "580" & as.character( df_diabetes_diag$diag_1) <= "629" |  as.character( df_diabetes_diag$diag_1 ) == "788")
+                   | (as.character( df_diabetes_diag$diag_2) >= "580" & as.character( df_diabetes_diag$diag_2) <= "629" |  as.character( df_diabetes_diag$diag_2 ) == "788")
+                   | (as.character( df_diabetes_diag$diag_3) >= "580" & as.character( df_diabetes_diag$diag_3) <= "629" |  as.character( df_diabetes_diag$diag_3 ) == "788")] <- 'Yes'
+
+#creating diagnosis varible for Neoplasms codes: 140-239
+
+df_diabetes_diag$diag_neop[(as.character( df_diabetes_diag$diag_1) >= "140" & as.character( df_diabetes_diag$diag_1) <= "239")
+                   | (as.character( df_diabetes_diag$diag_2) >= "140" & as.character( df_diabetes_diag$diag_2) <= "239")
+                   | (as.character( df_diabetes_diag$diag_3) >= "140" & as.character( df_diabetes_diag$diag_3) <= "239")] <- 'Yes'
+
+
+df_diabetes_diag$diag_other[(as.character( df_diabetes_diag$diag_1) == "780") | (as.character( df_diabetes_diag$diag_1) == "781")
+                    | (as.character( df_diabetes_diag$diag_1) == "784") | (as.character( df_diabetes_diag$diag_1) >= "790" & as.character( df_diabetes_diag$diag_1) <= "799")
+                    | (as.character( df_diabetes_diag$diag_1) >= "240" & as.character( df_diabetes_diag$diag_1) <= "249") | (as.character( df_diabetes_diag$diag_1) >= "251" & as.character( df_diabetes_diag$diag_1) <= "279")
+                    | (as.character( df_diabetes_diag$diag_1) >= "680" & as.character( df_diabetes_diag$diag_1) <= "709") | (as.character( df_diabetes_diag$diag_1) == "782") 
+                    | (as.character( df_diabetes_diag$diag_1) >= "001" & as.character( df_diabetes_diag$diag_1) <= "139") | (as.character( df_diabetes_diag$diag_1) >= "290" & as.character( df_diabetes_diag$diag_1) <= "319")
+                    | (as.character( df_diabetes_diag$diag_1) >= "280" & as.character( df_diabetes_diag$diag_1) <= "289") | (as.character( df_diabetes_diag$diag_1) >= "320" & as.character( df_diabetes_diag$diag_1) <= "359")
+                    | (as.character( df_diabetes_diag$diag_1) >= "630" & as.character( df_diabetes_diag$diag_1) <= "679") | (as.character( df_diabetes_diag$diag_1) >= "360" & as.character( df_diabetes_diag$diag_1) <= "389")
+                    | (as.character( df_diabetes_diag$diag_1) >= "740" & as.character( df_diabetes_diag$diag_1) <= "759")
+                    | (startsWith(as.character( df_diabetes_diag$diag_1), 'E'))
+                    | (startsWith(as.character( df_diabetes_diag$diag_1), 'V'))
+                    | (as.character( df_diabetes_diag$diag_2) == "780") | (as.character( df_diabetes_diag$diag_2) == "781")
+                    | (as.character( df_diabetes_diag$diag_2) == "784") | (as.character( df_diabetes_diag$diag_2) >= "790" & as.character( df_diabetes_diag$diag_2) <= "799")
+                    | (as.character( df_diabetes_diag$diag_2) >= "240" & as.character( df_diabetes_diag$diag_2) <= "249") | (as.character( df_diabetes_diag$diag_2) >= "251" & as.character( df_diabetes_diag$diag_2) <= "279")
+                    | (as.character( df_diabetes_diag$diag_2) >= "680" & as.character( df_diabetes_diag$diag_2) <= "709") | (as.character( df_diabetes_diag$diag_2) == "782") 
+                    | (as.character( df_diabetes_diag$diag_2) >= "001" & as.character( df_diabetes_diag$diag_2) <= "139") | (as.character( df_diabetes_diag$diag_2) >= "290" & as.character( df_diabetes_diag$diag_2) <= "319")
+                    | (as.character( df_diabetes_diag$diag_2) >= "280" & as.character( df_diabetes_diag$diag_2) <= "289") | (as.character( df_diabetes_diag$diag_2) >= "320" & as.character( df_diabetes_diag$diag_2) <= "359")
+                    | (as.character( df_diabetes_diag$diag_2) >= "630" & as.character( df_diabetes_diag$diag_2) <= "679") | (as.character( df_diabetes_diag$diag_2) >= "360" & as.character( df_diabetes_diag$diag_2) <= "389")
+                    | (as.character( df_diabetes_diag$diag_2) >= "740" & as.character( df_diabetes_diag$diag_2) <= "759")
+                    | (startsWith(as.character( df_diabetes_diag$diag_2), 'E')) 
+                    | (startsWith(as.character( df_diabetes_diag$diag_2), 'V'))
+                    | (as.character( df_diabetes_diag$diag_3) == "780") | (as.character( df_diabetes_diag$diag_3) == "781")
+                    | (as.character( df_diabetes_diag$diag_3) == "784") | (as.character( df_diabetes_diag$diag_3) >= "790" & as.character( df_diabetes_diag$diag_3) <= "799")
+                    | (as.character( df_diabetes_diag$diag_3) >= "240" & as.character( df_diabetes_diag$diag_3) <= "249") | (as.character( df_diabetes_diag$diag_3) >= "251" & as.character( df_diabetes_diag$diag_3) <= "279")
+                    | (as.character( df_diabetes_diag$diag_3) >= "680" & as.character( df_diabetes_diag$diag_3) <= "709") | (as.character( df_diabetes_diag$diag_3) == "782")
+                    | (as.character( df_diabetes_diag$diag_3) >= "001" & as.character( df_diabetes_diag$diag_3) <= "139") | (as.character( df_diabetes_diag$diag_3) >= "290" & as.character( df_diabetes_diag$diag_3) <= "319")
+                    | (as.character( df_diabetes_diag$diag_3) >= "280" & as.character( df_diabetes_diag$diag_3) <= "289") | (as.character( df_diabetes_diag$diag_3) >= "320" & as.character( df_diabetes_diag$diag_3) <= "359")
+                    | (as.character( df_diabetes_diag$diag_3) >= "630" & as.character( df_diabetes_diag$diag_3) <= "679") | (as.character( df_diabetes_diag$diag_3) >= "360" & as.character( df_diabetes_diag$diag_3) <= "389")
+                    | (as.character( df_diabetes_diag$diag_3) >= "740" & as.character( df_diabetes_diag$diag_3) <= "759")
+                    | (startsWith(as.character(df_diabetes_diag$diag_3), 'E')) 
+                    | (startsWith(as.character(df_diabetes_diag$diag_3), 'V'))] <- 'Yes'
+```
+
+```{r}
+df_diabetes_diag <- subset(df_diabetes_diag,select=-c(diag_1,diag_2,diag_3))
+for(i in 1:ncol(df_diabetes_diag)){
+  if(is.character(df_diabetes_diag[,i])){
+    df_diabetes_diag[,i] <- as.factor(df_diabetes_diag[,i])
+  }
+}
+df_diabetes <- cbind(df_diabetes,df_diabetes_diag)
+```
+
+
+Drop unnecessary columns in the original dataframe
+```{r}
+df_diabetes <- subset(df_diabetes,select=-c(admission_type_id,discharge_disposition_id,admission_source_id,repaglinide,nateglinide,pioglitazone,rosiglitazone,glyburide.metformin,readmitted,medical_specialty,diag_1,diag_2,diag_3))
+```
+
+
+***EDA***\
+Compute basic stats for all the variables
+```{r}
+summary(df_diabetes)
+```
+
+Plot histograms for all the numeric variables. It can be seen from the charts that most of these variables have highly varying magnitudes thus need to be scaled before performing machine learning later.
+```{r}
+hist_list <- list()
+z <- 0
+for (i in 1:ncol(df_diabetes)){
+  if(is.numeric(df_diabetes[,i])){
+    z <- z+1
+    hist <- ggplot(data=df_diabetes,aes_string(names(df_diabetes)[i]))+
+      geom_histogram(fill='lightblue',color='black')+
+      labs(x=colnames(df_diabetes)[i],y= "Frequency")+
+      theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=8))
+    hist_list[[z]] <- hist
+  }
+}
+hist_list
+```
+
+```{r}
+library(scales)
+bar_list <- list()
+z <- 0
+
+for (i in 1:ncol(df_diabetes)){
+  if(is.factor(df_diabetes[,i])){
+    z <- z+1
+    class <- df_diabetes %>% 
+     group_by((df_diabetes)[i]) %>%
+     dplyr::summarise(number=n()) %>%
+     mutate(percentage=percent(number/sum(number))) %>% 
+     mutate(pos = cumsum(number)- number/1.5) #Create a variable to indicate the position of labels 
+    bar <- ggplot(data=class,aes_string(x=colnames(class)[1],y=colnames(class)[2]))+
+      geom_bar(fill='lightblue',color='black',stat = "identity")+
+      labs(x=colnames(df_diabetes)[i],y= "Count")+
+      geom_text(aes(label=paste(number,"(",percentage,")")),vjust=-0.5,size=2,color="red")+
+      theme(axis.text=element_text(size=8,angle=45,hjust=1),axis.title=element_text(size=8))
+    bar_list[[z]] <- bar
+  }
+}
+bar_list
+```
+
+
+The grouped box plots below show that the time in hospital, number of lab procedures, number of medications, number of outpatient visits, number of emergency visits, number of inpatient visits and the number of diagnoses are all significantly higher in the readmitted group (p<0.05, t<0)
+```{r}
+var_list <- colnames(df_diabetes)
+grouped_box_list <- list()
+z <- 0
+for (i in 1:ncol(df_diabetes)){
+  if (is.numeric(df_diabetes[,i])){
+    # add p value for the t test in the grouped chart
+    t <- unname(t.test(df_diabetes[,i]~df_diabetes$readmitted_binary)[[1]])
+    p <- t.test(df_diabetes[,i]~df_diabetes$readmitted_binary)$p.value
+    ad_index=which(names(df_diabetes)=='readmitted_binary')
+    z <- z+1
+    grouped_box <- ggplot(data=df_diabetes,aes_string(x=var_list[ad_index],y=var_list[i],fill=var_list[ad_index]))+
+      geom_boxplot()+
+      theme(axis.text=element_text(size=10,angle=45,hjust=1),axis.title=element_text(size=10),legend.key.size=unit(1,"cm"),legend.title=element_text(size=10),legend.text=element_text(size=10))+xlab(paste("readmitted (p=",p," ,t=",t,")"))
+    grouped_box_list[[z]] <- grouped_box
+  }
+}
+grouped_box_list
+```
+
+Here're the insights from the grouped bar chart below:\
+1. There's a significantly higher proportion of senior patients (age>70) in the readmitted group.\
+2. The ratio of people without A1C being collected is much higher in the readmitted group.\
+3. There's a significantly higher proportion of people who had medication change in the readmitted group or were taking diabebes meds. Details as below:\
+1)The people who were readmitted were more likely not to take metformin or have reduced the dose\
+2)The people who were readmitted were more likely not to take glipizide or have changed the dose\
+3)For people who were readmitted, they were more likely to have dosage change in insulin if they were taking it.\
+4)People were more likely to take repaglinide and pioglitazone in the readmitted group.\
+4.People who were readmitted were more likely to be admitted through emergency service or discharged to a health facility other than home.\
+5.The ratio of people under general surgery, internal medicine, family practice and emergency/trauma is significantly higher in the readmitted group.\
+6.People who were diagnosed with respiratory conditions and diabetes mellitus are less likely to be readmitted, but people diagnosed with injury, genitourinaryi and neoplasms are more likely to be readmitted.
+
+```{r}
+grouped_bar_list <- list()
+z <- 0
+for (i in 1:ncol(df_diabetes)){
+  if (is.factor(df_diabetes[,i]) & names(df_diabetes)[i]!="readmitted_binary"){
+    p <- chisq.test(df_diabetes[,i],df_diabetes$readmitted_binary)$p.value
+    ad_index <- which(names(df_diabetes)=='readmitted_binary')
+    z <- z+1
+    grouped_class <- df_diabetes[,c(ad_index,i)]%>%
+      group_by_all()%>%
+     dplyr::summarise(count=n())%>%
+      group_by(readmitted_binary)%>%
+      dplyr::mutate(perc=count/sum(count))
+    grouped_bar <- ggplot(data=grouped_class, aes_string(x=names(grouped_class)[2], y=names(grouped_class)[4],fill=names(grouped_class)[2]))+geom_bar(position = 'dodge', stat ='identity')+labs(x=names(grouped_class)[2], y ="perc")+ theme(text = element_text(size=10),axis.title=element_text(size=10),axis.text=element_text(size=10,hjust=1,angle = 45))+ geom_text(aes(label = scales::percent(perc)),size=2,position=position_dodge(width=1), vjust =-0.5)+xlab(paste("readmitted (p value=",p,")"))+facet_grid(. ~readmitted_binary,scales='free')
+    grouped_bar_list[[z]] <- grouped_bar
+  }
+}
+grouped_bar_list
+```
+
+No highly correlated numerical variables were observed. There's a moderate correlation between number of medications and time in hospital.
+```{r}
+num_list <- c()
+for(i in 1:ncol(df_diabetes)){
+  if(is.numeric(df_diabetes[,i])){
+    num_list <- append(num_list,i)
+  }
+}
+df_diabetes_num <- df_diabetes[,num_list]
+correlation_plot <- cor(df_diabetes_num )
+corrplot(correlation_plot, method = 'number',number.cex=0.75)
+```
+

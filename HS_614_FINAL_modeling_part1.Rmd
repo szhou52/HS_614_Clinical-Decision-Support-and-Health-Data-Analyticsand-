@@ -1,0 +1,292 @@
+---
+title: "HS614_Final_modeling_1"
+author: "Shuhao Zhou"
+date: "5/10/2022"
+output: html_document
+---
+
+**In this markdown file, I will add all the remaining predictors in the diabetic_processed file and use models including logistic regression, elastic net, KNN, linear SVM, decision tree, random forest and XGBoost to predict readmission status**
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+
+```{r}
+library(pROC)
+library(glmnet)
+library(e1071)
+library(dplyr)
+library(partykit)
+library(randomForest)
+library(xgboost)
+```
+
+
+```{r}
+df_diabetes_com <- read.csv('C:/USFCA/HS 614/Final Project/diabetic_processed.csv')
+```
+
+
+Split the dataset into training and test set
+```{r}
+library(caTools)
+set.seed(123)
+
+split <- sample.split(df_diabetes_com$readmitted_binary_Yes,SplitRatio=0.7)
+train <- subset(df_diabetes_com, split == T)
+test <- subset(df_diabetes_com, split == F)
+```
+
+```{r}
+train$readmitted <- factor(ifelse(train$readmitted_binary_Yes==1,'Yes','No'))
+test$readmitted <- factor(ifelse(test$readmitted_binary_Yes==1,'Yes','No'))
+
+train <- subset(train,select=-c(readmitted_binary_Yes))
+test <- subset(test,select=-c(readmitted_binary_Yes))
+```
+
+Subsampling the negative cases in the training set
+```{r}
+pos_cases <- train[train$readmitted=='Yes',]
+neg_cases <- train[train$readmitted=='No',]
+pos_count <- nrow(pos_cases)
+neg_cases <- sample_n(neg_cases, pos_count)
+train <- rbind(pos_cases,neg_cases)
+```
+
+Subsampling the test set so that nrow(test)=0.5*nrow(train)
+```{r}
+test <- sample_n(test, nrow(train)/2)
+```
+
+
+Scale the numerical variables
+```{r}
+library(caret)
+train_num <- train[,1:8]
+test_num <- test[,1:8]
+normParam <- preProcess(train_num, method = c("center", "scale"))
+train_num <- predict(normParam, train_num)
+test_num <- predict(normParam, test_num)
+
+train[,1:8] <- train_num
+test[,1:8] <- test_num
+```
+
+
+```{r}
+model_list <- c()
+auc_list <- c()
+```
+
+
+```{r}
+index_last_pre <- ncol(train)-1
+```
+
+
+***Logistic Regression***
+```{r}
+logistic_model <- glm(readmitted~.,family='binomial',data=train)
+summary(logistic_model)
+```
+
+```{r}
+logistic_results = predict(logistic_model, test, type='response')
+```
+
+
+```{r}
+logistic_auc <- auc(test$readmitted, logistic_results)
+logistic_auc
+```
+```{r}
+model_list <- append(model_list,'logistic regression')
+auc_list <- append(auc_list,logistic_auc)
+```
+
+
+
+***Elastic Net-glm***
+```{r}
+en_model <- cv.glmnet(as.matrix(train[,1:index_last_pre]), train$readmitted, family = "binomial", alpha = 0.5)
+```
+
+```{r}
+en_results <- predict(en_model, newx=as.matrix(test[,1:index_last_pre]), type = "response")
+```
+
+```{r}
+en_auc <- auc(test$readmitted, en_results)
+en_auc
+```
+```{r}
+model_list <- append(model_list,'elastic net')
+auc_list <- append(auc_list,en_auc)
+```
+
+
+
+***SVM-linear***
+```{r}
+SVM_linear_model = svm(readmitted~.,
+                 data = train,
+                 type = 'C-classification',
+                 kernel = 'linear',
+                 decision.values=TRUE,
+                 probability=TRUE)
+```
+
+```{r}
+SVM_linear_results = predict(SVM_linear_model, newdata = test[,1:index_last_pre],probability=TRUE)
+SVM_linear_probs = attr(SVM_linear_results,"probabilities") 
+
+SVM_linear_auc <- auc(test$readmitted, SVM_linear_probs[,2])
+SVM_linear_auc
+```
+```{r}
+model_list <- append(model_list,'linear svm')
+auc_list <- append(auc_list,SVM_linear_auc)
+```
+
+
+
+***KNN***
+```{r}
+library(class)
+error_list = c()
+k_list = c()
+for (k in 1:50){
+y_pred = knn(train = train[,1:index_last_pre],
+             test = test[,1:index_last_pre],
+             cl = train$readmitted,
+             k = k)
+
+error = mean(y_pred != test$readmitted)
+k_list = c(k_list, k)
+error_list = c(error_list, error)}
+error_df <- data.frame(k_list,error_list)
+error_df <- error_df[order(error_list),]
+```
+
+```{r}
+error_df
+```
+
+
+```{r}
+KNN_results= knn(train = train[,1:index_last_pre],
+             test = test[,1:index_last_pre],
+             cl = train$readmitted,
+             k = 41)
+
+# Making the Confusion Matrix
+cm_KNN <- confusionMatrix(test$readmitted, KNN_results)
+cm_KNN
+```
+
+```{r}
+model_list <- append(model_list,'KNN')
+auc_list <- append(auc_list,cm_KNN$overall['Kappa'])
+```
+
+
+
+***Decision Tree***
+```{r}
+
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              classProbs = TRUE,
+                              summaryFunction=twoClassSummary)
+tune <- train(readmitted ~., data = train, 
+               method = 'ctree',
+               metric="ROC",
+               trControl = train_control)
+```
+
+```{r}
+print(tune)
+```
+
+```{r}
+tree_model <- ctree(readmitted~.,data=train,control=ctree_control(mincriterion=0.99))
+tree_results <- predict(tree_model,newdata = test[,1:index_last_pre],type='prob')
+```
+
+```{r}
+tree_auc <- auc(test$readmitted, tree_results[,2])
+tree_auc
+```
+
+```{r}
+model_list <- append(model_list,'Decision Tree')
+auc_list <- append(auc_list,tree_auc)
+```
+
+
+***Random Forest***
+```{r}
+rfGrid <- expand.grid(.mtry = c(2,5,10,20,30))
+
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              classProbs = TRUE,
+                              summaryFunction=twoClassSummary)
+tune <- train(readmitted ~., data = train, 
+               method = 'rf',
+               metric="ROC",
+              tuneGrid = rfGrid,
+               trControl = train_control)
+print(tune)
+```
+
+```{r}
+rf_model <- randomForest(formula=readmitted~.,data=train,mtry=5,method='class')
+rf_results <- predict(rf_model, newdata = test[,1:index_last_pre],type="prob")
+rf_auc <- auc(test$readmitted,rf_results[,2])
+rf_auc
+```
+
+```{r}
+model_list <- append(model_list,'Random Forest')
+auc_list <- append(auc_list,rf_auc)
+```
+
+
+***XGBoost***
+```{r}
+
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              classProbs = TRUE,
+                              summaryFunction=twoClassSummary)
+tune <- train(readmitted ~., data = train, 
+               method = "xgbTree",
+               metric="ROC",
+               trControl = train_control)
+print(tune)
+```
+
+
+```{r}
+xgb_model <- xgboost(data = as.matrix(train[,1:index_last_pre]),label=train$readmitted,nrounds = 50, max_depth = 2, eta = 0.3, gamma =0, colsample_bytree = 0.8, min_child_weight = 1,subsample = 1)
+xgb_results <- predict(xgb_model, newdata=as.matrix(test[,1:index_last_pre]),type="prob")
+xgb_auc <- auc(test$readmitted,xgb_results)
+xgb_auc
+```
+
+```{r}
+model_list <- append(model_list,'XGBoost')
+auc_list <- append(auc_list,xgb_auc)
+```
+
+***Results***
+```{r}
+result <- data.frame(model_list,auc_list)
+colnames(result)[2] <- 'auc_kappa'
+result <- result[order(-result$auc_kappa),]
+result
+```
+

@@ -1,0 +1,364 @@
+---
+title: "HS_614_FINAL_modeling_part2"
+author: "Shuhao Zhou"
+date: "5/11/2022"
+output: html_document
+---
+
+**In this markdown file, I will perform PCA on all the remaining predictors in the diabetic_processed file and use models including logistic regression, elastic net, KNN, linear SVM, decision tree, random forest and XGBoost**
+
+```{r}
+library(pROC)
+library(glmnet)
+library(e1071)
+library(dplyr)
+library(partykit)
+library(randomForest)
+library(xgboost)
+library(caTools)
+library(caret)
+library(factoextra)
+```
+
+```{r}
+setwd('C:/USFCA/HS 614/Final Project')
+```
+
+
+```{r}
+df_diabetes_com <- read.csv('C:/USFCA/HS 614/Final Project/diabetic_processed.csv')
+```
+
+Split the dataset into training and test set
+```{r}
+set.seed(123)
+
+split <- sample.split(df_diabetes_com$readmitted_binary_Yes,SplitRatio=0.7)
+train <- subset(df_diabetes_com, split == T)
+test <- subset(df_diabetes_com, split == F)
+```
+
+
+```{r}
+train$readmitted <- factor(ifelse(train$readmitted_binary_Yes==1,'Yes','No'))
+test$readmitted <- factor(ifelse(test$readmitted_binary_Yes==1,'Yes','No'))
+
+train <- subset(train,select=-c(readmitted_binary_Yes))
+test <- subset(test,select=-c(readmitted_binary_Yes))
+```
+
+
+Subsampling the negative cases in the training set
+```{r}
+pos_cases <- train[train$readmitted=='Yes',]
+neg_cases <- train[train$readmitted=='No',]
+pos_count <- nrow(pos_cases)
+neg_cases <- sample_n(neg_cases, pos_count)
+train <- rbind(pos_cases,neg_cases)
+```
+
+
+Subsampling the test set so that nrow(test)=0.5*nrow(train)
+```{r}
+test <- sample_n(test, nrow(train)/2)
+```
+
+
+Remove columns with constant values (if there's any)
+```{r}
+non_constant_list <- c()
+for(i in (1:(ncol(train)-1))){
+  if(sd(train[,i])!=0){
+    non_constant_list <- append(non_constant_list,i)
+  }
+}
+
+train <- train[,c(non_constant_list,ncol(train))]
+test <- test[,c(non_constant_list,ncol(train))]
+```
+
+```{r}
+index_last_pre <- ncol(train)-1
+```
+
+
+Since there're too many attributes in the dataset, I will perform principle component analysis to reduce the dimension of the data.
+```{r}
+set.seed(123)
+pca_model <- prcomp(train[,1:index_last_pre],
+                 center = TRUE,
+                 scale. = TRUE) 
+print(pca_model)
+```
+
+```{r}
+get_eigenvalue(pca_model)
+```
+
+
+
+```{r}
+# Set the cumulative percentage threshold at 99%, thus component=60
+pca <- preProcess(x = train[,1:index_last_pre], method = 'pca', pcaComp = 60)
+train_pca <-predict(pca, train[,1:index_last_pre])
+test_pca <- predict(pca, test[,1:index_last_pre])
+```
+
+```{r}
+train <- cbind(train_pca,train$readmitted)
+test <- cbind(test_pca,test$readmitted)
+```
+
+```{r}
+index_last_pre <- ncol(train)-1
+```
+
+
+```{r}
+colnames(train)[ncol(train)] <- 'readmitted'
+colnames(test)[ncol(test)] <- 'readmitted'
+```
+
+
+```{r}
+model_list_PCA <- c()
+auc_list_PCA <- c()
+```
+
+
+***Modeling***\
+Logistic Regression
+```{r}
+logistic_model <- glm(readmitted~.,family='binomial',data=train)
+summary(logistic_model)
+```
+
+```{r}
+logistic_results = predict(logistic_model, test, type='response')
+```
+
+
+```{r}
+logistic_auc <- auc(test$readmitted, logistic_results)
+logistic_auc
+```
+```{r}
+auc_list_PCA <- append(auc_list_PCA,logistic_auc)
+model_list_PCA <- append(model_list_PCA,'Logistic regression_PCA')
+```
+
+
+Elastic Net-glm
+```{r}
+en_model <- cv.glmnet(as.matrix(train[,1:index_last_pre]), train$readmitted, family = "binomial", alpha = 0.5)
+```
+
+```{r}
+en_results <- predict(en_model, newx=as.matrix(test[,1:index_last_pre]), type = "response")
+```
+
+```{r}
+en_auc <- auc(test$readmitted, en_results)
+en_auc
+```
+
+```{r}
+auc_list_PCA <- append(auc_list_PCA,en_auc)
+model_list_PCA <- append(model_list_PCA,'Elastic Net_PCA')
+```
+
+
+SVM-linear
+```{r}
+SVM_linear_model = svm(readmitted~.,
+                 data = train,
+                 type = 'C-classification',
+                 kernel = 'linear',
+                 decision.values=TRUE,
+                 probability=TRUE)
+```
+
+```{r}
+SVM_linear_results = predict(SVM_linear_model, newdata = test[,1:index_last_pre],probability=TRUE)
+SVM_linear_probs = attr(SVM_linear_results,"probabilities") 
+
+SVM_linear_auc <- auc(test$readmitted, SVM_linear_probs[,2])
+SVM_linear_auc
+```
+```{r}
+auc_list_PCA <- append(auc_list_PCA,SVM_linear_auc)
+model_list_PCA <- append(model_list_PCA,'Linear SVM')
+```
+
+
+SVM_rbf (take too much time; will run it later)
+```{r}
+# SVM_tuned <- tune(svm,train.x=train[,1:index_last_pre],train.y=train$readmitted,kernel='radial',
+#                   ranges=list(cost=10^(-1:2), gamma=c(0.25,0.5,1,2)))
+```
+
+```{r}
+# summary(SVM_tuned)
+```
+
+```{r}
+# SVM_rbf_model = svm(formula = readmitted~.,
+#                  data = train,
+#                  type = 'C-classification',
+#                  kernel = 'radial',
+#                  cost=,
+#                  gamma=,
+#                  decision.values=TRUE,
+#                  probability=TRUE)
+```
+
+```{r}
+# SVM_rbf_results = predict(SVM_rbf_model, newdata = test[,1:index_last_pre],probability=TRUE)
+# SVM_rbf_probs = attr(SVM_rbf_pred,"probabilities") 
+# 
+# SVM_rbf_auc <- auc(test$readmitted, SVM_rbf_probs[,2])
+# SVM_rbf_auc
+```
+
+
+KNN
+```{r}
+library(class)
+error_list = c()
+k_list = c()
+for (k in 1:50){
+y_pred = knn(train = train[,1:index_last_pre],
+             test = test[,1:index_last_pre],
+             cl = train$readmitted,
+             k = k)
+
+error = mean(y_pred != test$readmitted)
+k_list = c(k_list, k)
+error_list = c(error_list, error)}
+error_df <- data.frame(k_list,error_list)
+error_df <- error_df[order(error_list),]
+```
+
+
+```{r}
+error_df
+```
+
+```{r}
+KNN_results= knn(train = train[,1:index_last_pre],
+             test = test[,1:index_last_pre],
+             cl = train$readmitted,
+             k = 47)
+
+# Making the Confusion Matrix
+cm_KNN <- confusionMatrix(test$readmitted, KNN_results)
+cm_KNN
+```
+
+```{r}
+auc_list_PCA <- append(auc_list_PCA,cm_KNN$overall['Kappa'])
+model_list_PCA <- append(model_list_PCA,'KNN_PCA')
+```
+
+
+Decision Tree
+```{r}
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              classProbs = TRUE,
+                              summaryFunction=twoClassSummary)
+tune <- train(readmitted ~., data = train, 
+               method = 'ctree',
+               metric="ROC",
+               trControl = train_control)
+```
+
+```{r}
+print(tune)
+```
+
+
+```{r}
+tree_model <- ctree(readmitted~.,data=train,control=ctree_control(mincriterion=0.5))
+tree_results <- predict(tree_model,newdata = test[,1:index_last_pre],type='prob')
+```
+
+```{r}
+tree_auc <- auc(test$readmitted, tree_results[,2])
+tree_auc
+```
+```{r}
+auc_list_PCA <- append(auc_list_PCA,tree_auc)
+model_list_PCA <- append(model_list_PCA,'Decision_tree_PCA')
+```
+
+
+Random Forest
+```{r}
+rfGrid <- expand.grid(.mtry = c(2,5,10,20,30))
+
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              classProbs = TRUE,
+                              summaryFunction=twoClassSummary)
+tune <- train(readmitted ~., data = train, 
+               method = 'rf',
+               metric="ROC",
+              tuneGrid = rfGrid,
+               trControl = train_control)
+print(tune)
+```
+
+```{r}
+rf_model <- randomForest(formula=readmitted~.,data=train,mtry=20,method='class')
+rf_results <- predict(rf_model, newdata = test[,1:index_last_pre],type="prob")
+rf_auc <- auc(test$readmitted,rf_results[,2])
+rf_auc
+```
+```{r}
+auc_list_PCA <- append(auc_list_PCA,rf_auc)
+model_list_PCA <- append(model_list_PCA,'random forest_PCA')
+```
+
+
+XGBoost
+```{r}
+train_control <- trainControl(method = "cv",
+                              number = 5,
+                              classProbs = TRUE,
+                              summaryFunction=twoClassSummary)
+tune <- train(readmitted ~., data = train, 
+               method = "xgbTree",
+               metric="ROC",
+               trControl = train_control)
+print(tune)
+```
+
+
+```{r}
+xgb_model <- xgboost(data = as.matrix(train[,1:index_last_pre]),label=train$readmitted,nrounds = 150, max_depth = 1, eta = 0.3, gamma =0, colsample_bytree = 0.6, min_child_weight = 1,subsample = 1,)
+xgb_results <- predict(xgb_model, newdata=as.matrix(test[,1:index_last_pre]),type="prob")
+xgb_auc <- auc(test$readmitted,xgb_results)
+xgb_auc
+```
+
+```{r}
+auc_list_PCA <- append(auc_list_PCA,xgb_auc)
+model_list_PCA <- append(model_list_PCA,'XGBoost_PCA')
+```
+
+
+***Result***\
+```{r}
+result <- data.frame(model_list_PCA,auc_list_PCA)
+colnames(result)[2] <- 'AUC_Kappa'
+result <- result[order(-result$AUC_Kappa),]
+result
+```
+
+***A comparison of the results before and after the PCA***
+```{r figurename, echo=FALSE, fig.cap="my caption", out.width = '90%'}
+knitr::include_graphics("Final_Comparison.png")
+```
+
+
